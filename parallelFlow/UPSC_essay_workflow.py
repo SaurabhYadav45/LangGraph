@@ -1,21 +1,93 @@
-from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
+from langchain_google_genai import ChatGoogleGenerativeAI
 from typing import TypedDict, Annotated
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+import os
 import operator
 
 load_dotenv()
 
-llm = ChatOpenAI(model="gpt-4o")
+api_key = os.getenv("GEMINI_API_KEY")
 
+model = ChatGoogleGenerativeAI(
+    model = "gemini-2.5-flash",
+    google_api_key = api_key
+)
+
+# Schema for structured output using pydantic
 class EvaluationSchema(BaseModel):
-    feedback: str = Field(description="Detailed feeedback for the Essay")
+    feedback:str = Field(description="Detailed feedback for the essay")
     score:int = Field(description="Score out of 10", ge=0, le=10)
 
+# Model with structured output
+structured_model = model.with_structured_output(EvaluationSchema)
 
-structured_model = llm.with_structured_output(EvaluationSchema)
+# Define graph state
+class EssayState(TypedDict):
+    essay:str
+    language_feedback:str
+    analysis_feedback:str
+    clarity_feedback:str
+    overall_feedback:str
+    individual_scores:Annotated[list[int], operator.add]
+    avg_score:float
 
+def evaluate_language(state:EssayState):
+    essay = state["essay"]
+    prompt = f"Evaluate the language quality of the following essay and give a feedback and assign a score out of 10 \n {essay}"
+    output = structured_model.invoke(prompt)
+    return {"language_feedback": output.feedback, "individual_scores":[output.score]}
+
+
+def evaluate_analysis(state:EssayState):
+    essay = state["essay"]
+    prompt = f"Evaluate the depth of analysis of the following essay and provide a feedback and assign a score out of 10 \n {essay}"
+    output = structured_model.invoke(prompt)
+    return {"analysis_feedback": output.feedback, "individual_scores": [output.score]}
+
+
+def evaluate_clarity(state:EssayState):
+    essay = state["essay"]
+    prompt = f"Evaluate the clarity of thought of the following essay and provide a feedback and assign a score out of 10 \n {essay}"
+    output = structured_model.invoke(prompt)
+    return {"clarity_feedback": output.feedback, "individual_scores": [output.score]}
+
+
+
+def final_evaluation(state:EssayState):
+    essay = state["essay"]
+    prompt = f'Based on the following feedbacks create a summarized feedback \n language feedback - {state["language_feedback"]} \n depth of analysis feedback - {state["analysis_feedback"]} \n clarity of thought feedback - {state["clarity_feedback"]}'
+    
+    overall_feedback = model.invoke(prompt).content
+    avg_score = sum(state['individual_scores'])/len(state['individual_scores'])
+    return {"overall_feedback": overall_feedback, "avg_score":avg_score}
+
+
+# define graph
+graph = StateGraph(EssayState)
+
+# Add nodes
+graph.add_node("evaluate_language", evaluate_language)
+graph.add_node("evaluate_analysis", evaluate_analysis)
+graph.add_node("evaluate_clarity", evaluate_clarity)
+graph.add_node("final_evaluation", final_evaluation)
+
+# Add edges
+graph.add_edge(START, "evaluate_language")
+graph.add_edge(START, "evaluate_analysis")
+graph.add_edge(START, "evaluate_clarity")
+
+graph.add_edge("evaluate_language", "final_evaluation")
+graph.add_edge("evaluate_analysis", "final_evaluation")
+graph.add_edge("evaluate_clarity", "final_evaluation")
+
+graph.add_edge("final_evaluation", END)
+
+# compile graph
+workflow = graph.compile()
+
+# execute graph
 essay = """India in the Age of AI
 As the world enters a transformative era defined by artificial intelligence (AI), India stands at a critical juncture — one where it can either emerge as a global leader in AI innovation or risk falling behind in the technology race. The age of AI brings with it immense promise as well as unprecedented challenges, and how India navigates this landscape will shape its socio-economic and geopolitical future.
 
@@ -33,78 +105,14 @@ India’s demographic dividend, when paired with responsible AI adoption, can un
 
 In conclusion, India in the age of AI is a story in the making — one of opportunity, responsibility, and transformation. The decisions we make today will not just determine India’s AI trajectory, but also its future as an inclusive, equitable, and innovation-driven society."""
 
-
-class State(TypedDict):
-    essay:str
-    language_feedback:str
-    clarity_feedback:str
-    analysis_feedback:str
-    overall_feedback:str
-    individual_score: Annotated[list[int], operator.add]
-    avg_score : float
-
-
-def evaluate_language(state:State):
-    prompt = f"""
-    Evaluate the language quality of following essay and provide a feedback and assign a score out of 10 \n {state['essay']}
-    """
-    output = structured_model.invoke(prompt)
-    return {'language_feedback': output.feedback, 'individual_score': [output.score]}
-
-def evaluate_clarity(state:State):
-    prompt = f"""
-    Evaluate the clarity of thought of following essay and provide a feedback and assign a score out of 10 \n {state['essay']}
-    """
-    output = structured_model.invoke(prompt)
-    return {'clarity_feedback': output.feedback, 'individual_score': [output.score]}
-
-
-def evaluate_analysis(state:State):
-    prompt = f"""
-    Evaluate the depth of analysis of following essay and provide a feedback and assign a score out of 10 \n {state['essay']}
-    """
-    output = structured_model.invoke(prompt)
-    return {'analysis_feedback': output.feedback, 'individual_score': [output.score]}
-
-def evaluate_overall_feedback(state:State):
-    prompt=f"""
-Based on the following feedback create a summarized feedback \n language feedback - {state['language_feedback']} \n depth of analysis feedback-{state["analysis_feedback"]} \n Clarity of thought feedback - {state["clarity_feedback"]}
-"""
-    
-    overall_feedback = llm.invoke(prompt).content
-    avg_score = sum(state["individual_score"])/len(state["individual_score"])
-
-    return{'overall_feedback': overall_feedback, 'avg_score':avg_score}
-
-
-# add edge
-
-graph_builder = StateGraph(State)
-
-graph_builder.add_node("evaluate_language", evaluate_language)
-graph_builder.add_node("evaluate_clarity", evaluate_clarity)
-graph_builder.add_node("evaluate_analysis", evaluate_analysis)
-graph_builder.add_node("evaluate_overall_feedback", evaluate_overall_feedback)
-
-# Add edge
-graph_builder.add_edge(START, "evaluate_language")
-graph_builder.add_edge(START, "evaluate_clarity")
-graph_builder.add_edge(START, "evaluate_analysis")
-
-graph_builder.add_edge("evaluate_language", "evaluate_overall_feedback")
-graph_builder.add_edge("evaluate_clarity", "evaluate_overall_feedback")
-graph_builder.add_edge("evaluate_analysis", "evaluate_overall_feedback")
-
-graph_builder.add_edge("evaluate_overall_feedback", END)
-
-
-graph = graph_builder.compile()
-
 initial_state = {
-    'essay':essay
+    "essay":essay
 }
+result = workflow.invoke(initial_state)
+print(result)
 
-result = graph.invoke(initial_state)
-# print("Final Result", result)
-print("Individual_score : ", result['individual_score'])
-print("AVG_score : ", result['avg_score'])
+print("\nOverall Feedback:")
+print(result["overall_feedback"])
+
+print("\nAverage Score:")
+print(result["avg_score"])

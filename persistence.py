@@ -50,3 +50,12 @@ res2 = workflow.get_state_history(config1)
 print("\nRes2:")
 for snapshot in  res2:
     print("\n1:", snapshot)
+
+
+# Time Travel
+
+# workflow.get_state({"configurable": {"thread_id": "1", "checkpoint_id": "1f06cc6e-7232-6cb1-8000-f71609e6cec5"}})
+
+# workflow.invoke(None, {"configurable": {"thread_id": "1", "checkpoint_id": "1f06cc6e-7232-6cb1-8000-f71609e6cec5"}})
+
+# list(workflow.get_state_history(config1))
