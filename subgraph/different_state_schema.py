@@ -1,0 +1,128 @@
+# ***************************** SUBGRAPH ************************
+# Used in multi agntic workflow
+# Resused at many places
+
+# ******************** Type -1 : Call a subgraph inside Node ****************
+
+# *********************** Example : 2 *******************************
+
+# Grandchild graph
+from typing_extensions import TypedDict
+from langgraph.graph.state import StateGraph, START, END
+
+class GrandChildState(TypedDict):
+    my_grandchild_key: str
+
+def grandchild_1(state: GrandChildState) -> GrandChildState:
+    # NOTE: child or parent keys will not be accessible here
+    return {"my_grandchild_key": state["my_grandchild_key"] + ", how are you"}
+
+
+grandchild = StateGraph(GrandChildState)
+grandchild.add_node("grandchild_1", grandchild_1)
+
+grandchild.add_edge(START, "grandchild_1")
+grandchild.add_edge("grandchild_1", END)
+
+grandchild_graph = grandchild.compile()
+
+# Child graph
+class ChildState(TypedDict):
+    my_child_key: str
+
+def call_grandchild_graph(state: ChildState) -> ChildState:
+    # NOTE: parent or grandchild keys won't be accessible here
+    grandchild_graph_input = {"my_grandchild_key": state["my_child_key"]}
+    grandchild_graph_output = grandchild_graph.invoke(grandchild_graph_input)
+    return {"my_child_key": grandchild_graph_output["my_grandchild_key"] + " today?"}
+
+child = StateGraph(ChildState)
+# We're passing a function here instead of just compiled graph (`grandchild_graph`)
+child.add_node("child_1", call_grandchild_graph)
+child.add_edge(START, "child_1")
+child.add_edge("child_1", END)
+child_graph = child.compile()
+
+
+
+# Parent graph
+class ParentState(TypedDict):
+    my_key: str
+
+def parent_1(state: ParentState) -> ParentState:
+    # NOTE: child or grandchild keys won't be accessible here
+    return {"my_key": "hi " + state["my_key"]}
+
+def parent_2(state: ParentState) -> ParentState:
+    return {"my_key": state["my_key"] + " bye!"}
+
+def call_child_graph(state: ParentState) -> ParentState:
+    child_graph_input = {"my_child_key": state["my_key"]}
+    child_graph_output = child_graph.invoke(child_graph_input)
+    return {"my_key": child_graph_output["my_child_key"]}
+
+parent = StateGraph(ParentState)
+parent.add_node("parent_1", parent_1)
+# We're passing a function here instead of just a compiled graph (`child_graph`)
+parent.add_node("child", call_child_graph)
+parent.add_node("parent_2", parent_2)
+
+parent.add_edge(START, "parent_1")
+parent.add_edge("parent_1", "child")
+parent.add_edge("child", "parent_2")
+parent.add_edge("parent_2", END)
+
+parent_graph = parent.compile()
+
+result = parent_graph.invoke({"my_key":"Bob"})
+print("Result: \n", result)
+
+
+#  ********************** Example :1 ********************************
+
+# from typing_extensions import TypedDict
+# from langgraph.graph.state import StateGraph, START
+
+# # Define subgraph
+# class SubgraphState(TypedDict):
+#     # note that none of these keys are shared with the parent graph state
+#     bar: str
+#     baz: str
+
+# def subgraph_node_1(state: SubgraphState):
+#     return {"baz": "baaj"}
+
+# def subgraph_node_2(state: SubgraphState):
+#     return {"bar": state["bar"] + state["baz"]}
+
+# subgraph_builder = StateGraph(SubgraphState)
+# subgraph_builder.add_node(subgraph_node_1)
+# subgraph_builder.add_node(subgraph_node_2)
+# subgraph_builder.add_edge(START, "subgraph_node_1")
+# subgraph_builder.add_edge("subgraph_node_1", "subgraph_node_2")
+# subgraph = subgraph_builder.compile()
+
+# # Define parent graph
+# class ParentState(TypedDict):
+#     foo: str
+
+# def node_1(state: ParentState):
+#     return {"foo": "hi! " + state["foo"]}
+
+# def node_2(state: ParentState):
+#     # Transform the state to the subgraph state
+#     response = subgraph.invoke({"bar": state["foo"]})
+#     # Transform response back to the parent state
+#     return {"foo": response["bar"]}
+
+
+# builder = StateGraph(ParentState)
+# builder.add_node("node_1", node_1)
+# builder.add_node("node_2", node_2)
+# builder.add_edge(START, "node_1")
+# builder.add_edge("node_1", "node_2")
+# graph = builder.compile()
+
+# result = graph.invoke({"foo": "Laundi"})
+# print("Result: ", result)
+# print(result["foo"])
